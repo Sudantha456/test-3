@@ -1,0 +1,5 @@
+pyrogram
+tgcrypto
+yt-dlp[default,curl-cffi]
+curl_cffi
+cloudscraper
