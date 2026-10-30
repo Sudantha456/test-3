@@ -1,0 +1,74 @@
+name: Run ReClip Bot
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */5 * * *'
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Set up Deno (yt-dlp JavaScript runtime)
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg aria2 curl gpg dbus-x11
+
+      - name: Install and Launch Cloudflare WARP SOCKS5 Proxy
+        shell: bash
+        run: |
+          set -e
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-warp.list
+          sudo apt-get update
+          sudo apt-get install -y cloudflare-warp
+
+          sudo warp-svc >/tmp/warp-svc.log 2>&1 &
+          sleep 4
+          warp-cli --accept-tos registration new || warp-cli registration new || true
+          warp-cli --accept-tos mode proxy || warp-cli mode proxy || true
+          warp-cli --accept-tos proxy port 40000 || warp-cli proxy port 40000 || true
+          warp-cli --accept-tos connect || warp-cli connect || true
+          sleep 5
+
+          echo "=== WARP STATUS ==="
+          warp-cli status || true
+          echo "=== WARP SOCKS5 TEST ==="
+          curl --connect-timeout 10 --max-time 20 -fsS --socks5-hostname 127.0.0.1:40000 https://cloudflare.com/cdn-cgi/trace || echo "WARNING: WARP proxy test failed"
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -U pyrogram tgcrypto curl_cffi cloudscraper
+          pip install -U --pre "yt-dlp[default,curl-cffi]"
+
+      - name: Run Telegram Bot
+        env:
+          API_ID: ${{ secrets.API_ID }}
+          API_HASH: ${{ secrets.API_HASH }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          YTDLP_PROXY: socks5://127.0.0.1:40000
+          BOT_MAX_CONCURRENT: ${{ vars.BOT_MAX_CONCURRENT || '4' }}
+          DIRECT_RANGE_CONNECTIONS: ${{ vars.DIRECT_RANGE_CONNECTIONS || '8' }}
+          YTDLP_FRAGMENT_CONCURRENCY: ${{ vars.YTDLP_FRAGMENT_CONCURRENCY || '6' }}
+          TG_UPLOAD_TRANSMISSIONS: ${{ vars.TG_UPLOAD_TRANSMISSIONS || '8' }}
+          ARIA2_CONNECTIONS: ${{ vars.ARIA2_CONNECTIONS || '6' }}
+          TG_MAX_TRANSMISSIONS: ${{ vars.TG_MAX_TRANSMISSIONS || '6' }}
+        run: |
+          python3 -u bot.py
